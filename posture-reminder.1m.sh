@@ -104,15 +104,28 @@ function run(argv) {
 
   for (var a = 0; a <= 1.0; a += 0.1) { setAlpha(a); tick(0.02) }
 
-  // 오버레이가 뜨는 순간 누르고 있던 클릭으로 바로 닫히지 않게, 버튼이 한번 떨어진 뒤부터 클릭을 인식
+  // 클릭하면 닫는다. 예전엔 0.1s 마다 pressedMouseButtons 를 폴링했는데,
+  // 짧은 클릭(누름→뗌 50~150ms)이 폴링 간격 사이에 통째로 들어가면 감지되지 않아
+  // "클릭해도 안 닫힘" 문제가 있었다. 전역/로컬 이벤트 모니터로 mouse-down 자체를 잡는다.
+  // (모니터는 새 mouse-down 만 잡으므로, 메뉴에서 누르고 있던 클릭으로 바로 닫히지 않는다)
+  var clicked = false
+  var mask = (1 << 1) | (1 << 3)   // NSEventMaskLeftMouseDown | NSEventMaskRightMouseDown
+  var onClick = function(ev) { clicked = true; return ev }
+  var gMon = $.NSEvent.addGlobalMonitorForEventsMatchingMaskHandler(mask, onClick)
+  var lMon = $.NSEvent.addLocalMonitorForEventsMatchingMaskHandler(mask, onClick)
+
+  // 폴백: 모니터가 동작하지 않는 환경 대비해 버튼 상태를 촘촘히(0.03s) 폴링
   var armed = false
   var deadline = $.NSDate.dateWithTimeIntervalSinceNow(seconds)
-  while ($.NSDate.date.timeIntervalSinceDate(deadline) < 0) {
-    tick(0.1)
+  while (!clicked && $.NSDate.date.timeIntervalSinceDate(deadline) < 0) {
+    tick(0.03)
     var pressed = $.NSEvent.pressedMouseButtons !== 0
     if (!pressed) armed = true
     else if (armed) break
   }
+
+  if (gMon) $.NSEvent.removeMonitor(gMon)
+  if (lMon) $.NSEvent.removeMonitor(lMon)
 
   for (var a2 = 1.0; a2 >= 0; a2 -= 0.1) { setAlpha(a2); tick(0.02) }
   for (var i2 = 0; i2 < windows.length; i2++) windows[i2].close
