@@ -141,28 +141,22 @@ function run(argv) {
 
   for (var a = 0; a <= 1.0; a += 0.1) { setAlpha(a); tick(0.02) }
 
-  // 클릭하면 닫는다. 예전엔 0.1s 마다 pressedMouseButtons 를 폴링했는데,
-  // 짧은 클릭(누름→뗌 50~150ms)이 폴링 간격 사이에 통째로 들어가면 감지되지 않아
-  // "클릭해도 안 닫힘" 문제가 있었다. 전역/로컬 이벤트 모니터로 mouse-down 자체를 잡는다.
-  // (모니터는 새 mouse-down 만 잡으므로, 메뉴에서 누르고 있던 클릭으로 바로 닫히지 않는다)
+  // 클릭하면 닫는다. osascript 프로세스는 앱 이벤트 루프(app.run)를 돌지 않아
+  // 이벤트 모니터나 뷰 mouseDown 으로는 클릭이 전달되지 않는다 — 이벤트 큐를 직접
+  // 펌프(nextEvent)해서 이 창에 온 mouse-down 을 잡는다. pressedMouseButtons 폴링은
+  // 트랙패드 탭처럼 눌림 지속이 거의 없는 클릭을 놓치므로 폴백으로만 유지한다.
+  var downMask = (1 << 1) | (1 << 3)   // NSEventMaskLeftMouseDown | NSEventMaskRightMouseDown
   var clicked = false
-  var mask = (1 << 1) | (1 << 3)   // NSEventMaskLeftMouseDown | NSEventMaskRightMouseDown
-  var onClick = function(ev) { clicked = true; return ev }
-  var gMon = $.NSEvent.addGlobalMonitorForEventsMatchingMaskHandler(mask, onClick)
-  var lMon = $.NSEvent.addLocalMonitorForEventsMatchingMaskHandler(mask, onClick)
-
-  // 폴백: 모니터가 동작하지 않는 환경 대비해 버튼 상태를 촘촘히(0.03s) 폴링
-  var armed = false
+  var armed = false                    // 오버레이가 뜨기 전부터 눌려 있던 버튼은 무시
   var deadline = $.NSDate.dateWithTimeIntervalSinceNow(seconds)
   while (!clicked && $.NSDate.date.timeIntervalSinceDate(deadline) < 0) {
-    tick(0.03)
+    var ev = app.nextEventMatchingMaskUntilDateInModeDequeue(
+      downMask, $.NSDate.dateWithTimeIntervalSinceNow(0.05), $.NSDefaultRunLoopMode, true)
+    if (ev && !ev.isNil()) { clicked = true; break }
     var pressed = $.NSEvent.pressedMouseButtons !== 0
     if (!pressed) armed = true
-    else if (armed) break
+    else if (armed) clicked = true
   }
-
-  if (gMon) $.NSEvent.removeMonitor(gMon)
-  if (lMon) $.NSEvent.removeMonitor(lMon)
 
   for (var a2 = 1.0; a2 >= 0; a2 -= 0.1) { setAlpha(a2); tick(0.02) }
   for (var i2 = 0; i2 < windows.length; i2++) windows[i2].close
