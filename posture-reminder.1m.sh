@@ -43,7 +43,9 @@ pick_gif() {
 }
 
 # dorso 스타일 전체 화면 블러 오버레이 (모든 디스플레이, 클릭 또는 시간 경과로 닫힘)
+# $1(옵션)=표시할 GIF 경로 — 생략하면 폴더에서 순환 선택
 show_overlay() {
+  local gif="${1:-$(pick_gif)}"
   local jxa
   jxa=$(cat <<'JXA'
 ObjC.import('Cocoa')
@@ -163,7 +165,7 @@ function run(argv) {
 }
 JXA
 )
-  osascript -l JavaScript -e "$jxa" "$(overlay_seconds)" "$(pick_gif)"
+  osascript -l JavaScript -e "$jxa" "$(overlay_seconds)" "$gif"
 }
 
 notify() {
@@ -182,7 +184,8 @@ ask_number() { # $1=안내 문구, $2=기본값
 
 # ---- 액션 처리 (메뉴 클릭 시 인자와 함께 재실행됨) ----
 case "$1" in
-  overlay)  show_overlay; exit 0 ;;
+  overlay)  show_overlay "$2"; exit 0 ;;
+  preview)  nohup "$0" overlay "$2" >/dev/null 2>&1 & exit 0 ;;
   show_now) fire; exit 0 ;;
   reset)    reset_timer; exit 0 ;;
   pause)    touch "$PAUSED_FILE"; exit 0 ;;
@@ -240,10 +243,20 @@ else
 fi
 
 echo "---"
-echo "추천 스트레칭 동작"
-echo "--1. 양손 깍지 끼고 하늘 위로 기지개 켜기"
-echo "--2. 의자 등받이를 잡고 허리 비틀기"
-echo "--3. 턱 당기고 목 양옆으로 늘려주기"
+echo "추천 스트레칭 동작 (클릭하면 미리보기)"
+shopt -s nullglob nocaseglob
+GIFS=("$STRETCH_DIR"/*.gif)
+shopt -u nullglob nocaseglob
+if [ ${#GIFS[@]} -eq 0 ]; then
+  echo "--GIF가 없습니다 — 폴더에 .gif 를 넣어주세요"
+  echo "--스트레칭 GIF 폴더 열기 | bash=\"$SCRIPT\" param1=open_gifs terminal=false"
+else
+  for g in "${GIFS[@]}"; do
+    NAME=$(basename "$g" .gif)
+    NAME=${NAME//[-_]/ }
+    echo "--$NAME | bash=\"$SCRIPT\" param1=preview param2=\"$g\" terminal=false"
+  done
+fi
 echo "---"
 echo "알림 주기 변경 (현재 ${INTERVAL}분)"
 for m in 25 30 45 50 60 90; do
