@@ -18,64 +18,50 @@ INTERVAL_FILE="$CONF_DIR/interval"               # 알림 주기 (분)
 LAST_RESET_FILE="$CONF_DIR/last_reset"           # 타이머 시작 시각 (epoch)
 OVERLAY_SECONDS_FILE="$CONF_DIR/overlay_seconds" # 오버레이 자동 종료 (초)
 PAUSED_FILE="$CONF_DIR/paused"
-STRETCH_DIR="$CONF_DIR/stretches"                # 스트레칭 GIF 폴더 — 여기에 .gif 를 넣으면 순환 재생
-STRETCH_INDEX_FILE="$CONF_DIR/stretch_index"     # GIF 순환 인덱스
 
-mkdir -p "$CONF_DIR" "$STRETCH_DIR"
+mkdir -p "$CONF_DIR"
 
 interval_min()    { cat "$INTERVAL_FILE" 2>/dev/null || echo 50; }
 overlay_seconds() { cat "$OVERLAY_SECONDS_FILE" 2>/dev/null || echo 12; }
 last_reset()      { cat "$LAST_RESET_FILE" 2>/dev/null || echo 0; }
 reset_timer()     { date +%s > "$LAST_RESET_FILE"; }
 
-# stretches 폴더의 GIF 를 호출마다 하나씩 순환 선택 (없으면 빈 문자열 → JXA 가 텍스트 팁으로 폴백)
-pick_gif() {
-  shopt -s nullglob nocaseglob
-  local gifs=("$STRETCH_DIR"/*.gif)
-  shopt -u nullglob nocaseglob
-  local n=${#gifs[@]}
-  [ "$n" -eq 0 ] && return 0
-  local idx
-  idx=$(cat "$STRETCH_INDEX_FILE" 2>/dev/null || echo 0)
-  [[ "$idx" =~ ^[0-9]+$ ]] || idx=0
-  echo $(( (idx + 1) % n )) > "$STRETCH_INDEX_FILE"
-  printf '%s' "${gifs[$(( idx % n ))]}"
-}
-
-# dorso 스타일 전체 화면 블러 오버레이 (모든 디스플레이, 클릭 또는 시간 경과로 닫힘)
-# $1(옵션)=표시할 GIF 경로 — 생략하면 폴더에서 순환 선택
+# 전체 화면 블러 오버레이 — 스트레칭을 한 동작씩 카운트다운으로 안내하는 가이드 시퀀스
+# 클릭하면 다음 동작으로 건너뛰고, 마지막 동작을 넘기면 닫힌다.
 show_overlay() {
-  local gif="${1:-$(pick_gif)}"
   local jxa
   jxa=$(cat <<'JXA'
 ObjC.import('Cocoa')
 
-function addLabel(win, text, size, bold, y, alpha) {
+// 앉아서 하는 사무직 스트레칭 시퀀스 (t=동작 지시, s=보조 설명)
+var STRETCHES = [
+  { t: '턱 당기기 (친 턱)',         s: '턱을 목 쪽으로 천천히 당겨 유지 · 거북목 교정' },
+  { t: '목 옆으로 늘리기',           s: '손으로 머리를 한쪽으로 지그시, 반대쪽도 · 목·승모근' },
+  { t: '어깨 으쓱했다 툭 내리기',     s: '어깨를 귀까지 올렸다 힘 빼고 떨어뜨리기 · 상부 승모근 이완' },
+  { t: '가슴 펴고 날개뼈 모으기',     s: '양 어깨를 뒤로 열어 날개뼈를 가운데로 · 흉추 신전' },
+  { t: '앉은 채 몸통 비틀기',         s: '의자 등받이를 잡고 상체를 좌우로 · 허리 이완' }
+]
+
+function makeLabel(win, size, bold, y, alpha) {
   var w = win.frame.size.width
-  var l = $.NSTextField.labelWithString($(text))
+  var l = $.NSTextField.labelWithString($(''))
   l.setFont(bold ? $.NSFont.boldSystemFontOfSize(size) : $.NSFont.systemFontOfSize(size))
   l.setTextColor($.NSColor.colorWithCalibratedWhiteAlpha(1, alpha))
   l.setAlignment(1)
   l.setFrame($.NSMakeRect(0, y, w, size * 1.6))
   win.contentView.addSubview(l)
+  return l
 }
 
 function run(argv) {
-  var seconds = parseFloat(argv[0])
-  if (!(seconds > 0)) seconds = 12
-  var gifPath = argv[1] || ''
+  var hold = parseFloat(argv[0])   // 동작당 유지 시간(초)
+  if (!(hold > 0)) hold = 12
 
   var app = $.NSApplication.sharedApplication
   app.setActivationPolicy($.NSApplicationActivationPolicyAccessory)
 
-  var tips = [
-    '1. 양손 깍지 끼고 하늘 위로 기지개 켜기',
-    '2. 의자 등받이를 잡고 허리 비틀기',
-    '3. 턱 당기고 목 양옆으로 늘려주기'
-  ]
-
   var screens = $.NSScreen.screens
-  var windows = []
+  var wins = []
   for (var i = 0; i < screens.count; i++) {
     var frame = screens.objectAtIndex(i).frame
     var win = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer(
@@ -98,74 +84,74 @@ function run(argv) {
     var tint = $.NSBox.alloc.initWithFrame($.NSMakeRect(0, 0, w, h))
     tint.setBoxType(4)
     tint.setBorderWidth(0)
-    tint.setFillColor($.NSColor.colorWithCalibratedRedGreenBlueAlpha(0, 0, 0, 0.4))
+    tint.setFillColor($.NSColor.colorWithCalibratedRedGreenBlueAlpha(0, 0, 0, 0.45))
     win.contentView.addSubview(tint)
 
-    var cx = w / 2, cy = h / 2
-    var footer = '클릭하면 닫힙니다 · ' + Math.round(seconds) + '초 후 자동으로 사라집니다'
-
-    var img = gifPath ? $.NSImage.alloc.initWithContentsOfFile($(gifPath)) : null
-    if (img && img.isValid) {
-      // GIF 를 중앙에 재생하고 제목/안내/푸터 캡션은 유지한다.
-      var box = Math.min(420, Math.round(h * 0.42))
-      var gifBottom = cy - box / 2 + 10
-      var iv = $.NSImageView.alloc.initWithFrame($.NSMakeRect(cx - box / 2, gifBottom, box, box))
-      iv.setImage(img)
-      iv.setImageScaling(3)  // NSImageScaleProportionallyUpOrDown — 원본 비율 유지하며 박스에 맞춤
-      iv.setAnimates(true)   // GIF 애니메이션 재생 (오버레이 런루프가 프레임을 넘긴다)
-      win.contentView.addSubview(iv)
-
-      addLabel(win, '🧘 스트레칭 타임', 40, true, gifBottom + box + 24, 1.0)
-      addLabel(win, '앉은 지 오래됐어요 — 이 동작을 따라 몸을 풀어주세요', 20, false, gifBottom - 44, 0.95)
-      addLabel(win, footer, 14, false, gifBottom - 84, 0.6)
-    } else {
-      // GIF 가 없으면 기존 텍스트 팁으로 폴백
-      var mid = h * 0.55
-      addLabel(win, '🧘 스트레칭 타임', 46, true, mid + 40, 1.0)
-      addLabel(win, '앉은 지 오래됐어요 — 허리를 펴고 몸을 풀어주세요', 22, false, mid - 20, 0.95)
-      for (var t = 0; t < tips.length; t++) {
-        addLabel(win, tips[t], 18, false, mid - 90 - t * 36, 0.85)
-      }
-      addLabel(win, footer, 14, false, mid - 230, 0.6)
-    }
-
+    var cy = h / 2
+    wins.push({
+      win:   win,
+      prog:  makeLabel(win, 26, true,  cy + 150, 0.85), // 진행 (i/N)
+      instr: makeLabel(win, 40, true,  cy + 30,  1.0),  // 동작 지시
+      sub:   makeLabel(win, 22, false, cy - 40,  0.9),  // 보조 설명
+      count: makeLabel(win, 54, true,  cy - 150, 1.0),  // 카운트다운
+      hint:  makeLabel(win, 15, false, cy - 220, 0.6)   // 진행 점 + 안내
+    })
     win.orderFrontRegardless
-    windows.push(win)
   }
   app.activateIgnoringOtherApps(true)
 
-  function setAlpha(a) {
-    for (var i = 0; i < windows.length; i++) windows[i].setAlphaValue(a)
+  function setAlpha(a) { for (var i = 0; i < wins.length; i++) wins[i].win.setAlphaValue(a) }
+  function tick(sec) { $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(sec)) }
+
+  function render(idx) {
+    var s = STRETCHES[idx]
+    var dots = ''
+    for (var d = 0; d < STRETCHES.length; d++) dots += (d <= idx ? '●' : '○')
+    var prog = '🧘 스트레칭  ' + (idx + 1) + ' / ' + STRETCHES.length
+    for (var i = 0; i < wins.length; i++) {
+      wins[i].prog.setStringValue($(prog))
+      wins[i].instr.setStringValue($(s.t))
+      wins[i].sub.setStringValue($(s.s))
+      wins[i].hint.setStringValue($(dots + '      클릭하면 건너뛰기'))
+    }
   }
-  function tick(sec) {
-    $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(sec))
+  function setCount(sec) {
+    var txt = '⟳  ' + sec + '초'
+    for (var i = 0; i < wins.length; i++) wins[i].count.setStringValue($(txt))
   }
 
   for (var a = 0; a <= 1.0; a += 0.1) { setAlpha(a); tick(0.02) }
 
-  // 클릭하면 닫는다. osascript 프로세스는 앱 이벤트 루프(app.run)를 돌지 않아
-  // 이벤트 모니터나 뷰 mouseDown 으로는 클릭이 전달되지 않는다 — 이벤트 큐를 직접
-  // 펌프(nextEvent)해서 이 창에 온 mouse-down 을 잡는다. pressedMouseButtons 폴링은
-  // 트랙패드 탭처럼 눌림 지속이 거의 없는 클릭을 놓치므로 폴백으로만 유지한다.
+  // 클릭하면 다음 동작으로 건너뛴다. osascript 는 앱 이벤트 루프를 돌지 않으므로
+  // 이벤트 큐를 직접 펌프(nextEvent)해서 mouse-down 을 잡고, pressedMouseButtons
+  // 폴링은 트랙패드 탭처럼 눌림이 순간적인 클릭을 위한 폴백으로 둔다.
   var downMask = (1 << 1) | (1 << 3)   // NSEventMaskLeftMouseDown | NSEventMaskRightMouseDown
-  var clicked = false
   var armed = false                    // 오버레이가 뜨기 전부터 눌려 있던 버튼은 무시
-  var deadline = $.NSDate.dateWithTimeIntervalSinceNow(seconds)
-  while (!clicked && $.NSDate.date.timeIntervalSinceDate(deadline) < 0) {
-    var ev = app.nextEventMatchingMaskUntilDateInModeDequeue(
-      downMask, $.NSDate.dateWithTimeIntervalSinceNow(0.05), $.NSDefaultRunLoopMode, true)
-    if (ev && !ev.isNil()) { clicked = true; break }
-    var pressed = $.NSEvent.pressedMouseButtons !== 0
-    if (!pressed) armed = true
-    else if (armed) clicked = true
+  for (var idx = 0; idx < STRETCHES.length; idx++) {
+    render(idx)
+    var remaining = Math.round(hold)
+    var skip = false
+    while (remaining > 0 && !skip) {
+      setCount(remaining)
+      var sliceEnd = $.NSDate.dateWithTimeIntervalSinceNow(1)
+      while ($.NSDate.date.timeIntervalSinceDate(sliceEnd) < 0) {
+        var ev = app.nextEventMatchingMaskUntilDateInModeDequeue(
+          downMask, $.NSDate.dateWithTimeIntervalSinceNow(0.05), $.NSDefaultRunLoopMode, true)
+        if (ev && !ev.isNil()) { skip = true; break }
+        var pressed = $.NSEvent.pressedMouseButtons !== 0
+        if (!pressed) armed = true
+        else if (armed) { skip = true; break }
+      }
+      remaining -= 1
+    }
   }
 
   for (var a2 = 1.0; a2 >= 0; a2 -= 0.1) { setAlpha(a2); tick(0.02) }
-  for (var i2 = 0; i2 < windows.length; i2++) windows[i2].close
+  for (var i2 = 0; i2 < wins.length; i2++) wins[i2].win.close
 }
 JXA
 )
-  osascript -l JavaScript -e "$jxa" "$(overlay_seconds)" "$gif"
+  osascript -l JavaScript -e "$jxa" "$(overlay_seconds)"
 }
 
 notify() {
@@ -198,12 +184,11 @@ case "$1" in
     fi
     exit 0 ;;
   custom_overlay_secs)
-    ans=$(ask_number "오버레이 표시 시간을 초 단위로 입력하세요 (3–120)" "$(overlay_seconds)")
+    ans=$(ask_number "동작당 유지 시간을 초 단위로 입력하세요 (3–120)" "$(overlay_seconds)")
     if [[ "$ans" =~ ^[0-9]+$ ]] && [ "$ans" -ge 3 ] && [ "$ans" -le 120 ]; then
       echo "$ans" > "$OVERLAY_SECONDS_FILE"
     fi
     exit 0 ;;
-  open_gifs) mkdir -p "$STRETCH_DIR"; open "$STRETCH_DIR"; exit 0 ;;
   edit) open -e "$0"; exit 0 ;;
 esac
 
@@ -250,7 +235,6 @@ for m in 25 30 45 50 60 90; do
 done
 echo "--직접 입력… | bash=\"$SCRIPT\" param1=custom_interval terminal=false refresh=true"
 echo "Settings"
-echo "--스트레칭 GIF 폴더 열기 | bash=\"$SCRIPT\" param1=open_gifs terminal=false"
-echo "--오버레이 표시 시간 변경 (현재 $(overlay_seconds)초) | bash=\"$SCRIPT\" param1=custom_overlay_secs terminal=false refresh=true"
+echo "--동작당 유지 시간 변경 (현재 $(overlay_seconds)초) | bash=\"$SCRIPT\" param1=custom_overlay_secs terminal=false refresh=true"
 echo "--스크립트 편집기 열기 | bash=\"$SCRIPT\" param1=edit terminal=false"
 echo "--전체 새로고침 | href=swiftbar://refreshallplugins"
